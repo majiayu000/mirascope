@@ -9,6 +9,7 @@ import {
   setOAuthStateCookie,
   clearOAuthStateCookie,
   getAuthenticatedUser,
+  authenticate,
   type PathParameters,
 } from "@/auth/utils";
 import { UnauthorizedError } from "@/errors";
@@ -501,6 +502,82 @@ describe("getAuthenticatedUser - path parameter validation", () => {
 
       // Should return the API key owner, not the session user
       expect(result.id).toBe(owner.id);
+    }),
+  );
+});
+
+describe("authenticate", () => {
+  it.effect("returns user and apiKeyInfo when API key is valid", () =>
+    Effect.gen(function* () {
+      const { owner, environment, apiKey } = yield* TestAuthFixture;
+
+      const request = new Request("https://example.com/api/test", {
+        headers: {
+          "X-API-Key": apiKey,
+        },
+      });
+
+      const pathParams: PathParameters = {
+        environmentId: environment.id,
+      };
+
+      const result = yield* authenticate(request, pathParams);
+
+      expect(result.user.id).toBe(owner.id);
+      expect(result.apiKeyInfo).not.toBeNull();
+      expect(result.apiKeyInfo?.environmentId).toBe(environment.id);
+    }),
+  );
+
+  it.effect(
+    "returns user with null apiKeyInfo when session cookie is valid",
+    () =>
+      Effect.gen(function* () {
+        const { owner } = yield* TestAuthFixture;
+        const db = yield* Database;
+
+        const expiresAt = new Date(Date.now() + 1000 * 60 * 60);
+        const session = yield* db.sessions.create({
+          userId: owner.id,
+          data: { userId: owner.id, expiresAt },
+        });
+
+        const request = new Request("https://example.com/api/test", {
+          headers: {
+            Cookie: `session=${session.id}`,
+          },
+        });
+
+        const result = yield* authenticate(request);
+
+        expect(result.user.id).toBe(owner.id);
+        expect(result.apiKeyInfo).toBeNull();
+      }),
+  );
+
+  it.effect("returns UnauthorizedError when no API key or session cookie", () =>
+    Effect.gen(function* () {
+      const request = new Request("https://example.com/api/test");
+
+      const result = yield* authenticate(request).pipe(Effect.flip);
+
+      expect(result).toBeInstanceOf(UnauthorizedError);
+      expect(result.message).toBe("Authentication required");
+    }),
+  );
+
+  it.effect("returns UnauthorizedError when session is invalid", () =>
+    Effect.gen(function* () {
+      const request = new Request("https://example.com/api/test", {
+        headers: {
+          Cookie: "session=invalid-session",
+        },
+      });
+
+      const result = yield* authenticate(request).pipe(Effect.flip);
+
+      expect(result).toBeInstanceOf(UnauthorizedError);
+      expect(result.message).toBe("Invalid session");
     }),
   );
 });

@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Effect } from "effect";
 import { handleRequest } from "@/api/handler";
 import { handleErrors, handleDefects } from "@/api/utils";
-import { NotFoundError, InternalError } from "@/errors";
-import { getAuthenticatedUser, type PathParameters } from "@/auth";
+import { NotFoundError, InternalError, UnauthorizedError } from "@/errors";
+import { authenticate, type PathParameters } from "@/auth";
 import { Database } from "@/db";
 
 /**
@@ -39,6 +39,18 @@ function extractPathParameters(
   return hasParams ? pathParams : undefined;
 }
 
+const API_KEY_REQUIRED_PREFIXES = new Set([
+  "traces",
+  "functions",
+  "annotations",
+]);
+
+function requiresApiKey(splat: string | undefined): boolean {
+  if (!splat) return false;
+  const firstSegment = splat.split("/").filter(Boolean)[0];
+  return firstSegment ? API_KEY_REQUIRED_PREFIXES.has(firstSegment) : false;
+}
+
 export const Route = createFileRoute("/api/v0/$")({
   server: {
     handlers: {
@@ -62,14 +74,18 @@ export const Route = createFileRoute("/api/v0/$")({
           const pathParams = extractPathParameters(params["*"]);
 
           // getAuthenticatedUser now returns UnauthorizedError if authentication fails
-          const authenticatedUser = yield* getAuthenticatedUser(
-            request,
-            pathParams,
-          );
+          const authResult = yield* authenticate(request, pathParams);
+
+          if (requiresApiKey(params["*"]) && !authResult.apiKeyInfo) {
+            return yield* new UnauthorizedError({
+              message: "API key required",
+            });
+          }
 
           const result = yield* handleRequest(request, {
             prefix: "/api/v0",
-            authenticatedUser,
+            authenticatedUser: authResult.user,
+            authenticatedApiKey: authResult.apiKeyInfo,
             environment: process.env.ENVIRONMENT || "development",
           });
 

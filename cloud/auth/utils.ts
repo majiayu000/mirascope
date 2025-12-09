@@ -229,3 +229,58 @@ export const getAuthenticatedUser = (
       ),
     );
   });
+
+/** Auth result including optional API key info. */
+export type AuthenticationResult = {
+  user: PublicUser;
+  apiKeyInfo: ApiKeyInfo | null;
+};
+
+/** Authenticate with API key or session and return user + optional ApiKeyInfo. */
+export const authenticate = (
+  request: Request,
+  pathParams?: PathParameters,
+): Effect.Effect<AuthenticationResult, UnauthorizedError, Database> =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+
+    // 1. Try API key authentication first
+    const apiKey = getApiKeyFromRequest(request);
+    if (apiKey) {
+      // Validate the API key against path parameters and get complete info
+      const apiKeyInfo = yield* validateApiKey(apiKey, pathParams);
+
+      // Return both user and API key info
+      return {
+        user: {
+          id: apiKeyInfo.ownerId,
+          email: apiKeyInfo.ownerEmail,
+          name: apiKeyInfo.ownerName,
+          deletedAt: apiKeyInfo.ownerDeletedAt,
+        },
+        apiKeyInfo,
+      };
+    }
+
+    // 2. Fall back to session-based authentication
+    const sessionId = getSessionIdFromCookie(request);
+    if (!sessionId) {
+      return yield* Effect.fail(
+        new UnauthorizedError({
+          message: "Authentication required",
+        }),
+      );
+    }
+
+    const user = yield* db.sessions.findUserBySessionId(sessionId).pipe(
+      Effect.catchAll(() =>
+        Effect.fail(
+          new UnauthorizedError({
+            message: "Invalid session",
+          }),
+        ),
+      ),
+    );
+
+    return { user, apiKeyInfo: null };
+  });
